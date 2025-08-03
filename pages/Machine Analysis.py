@@ -1,4 +1,8 @@
 import streamlit as st
+from supabase import create_client
+import pandas as pd
+import datetime
+import altair as alt
 
 # --- Password Protection ---
 def password_gate():
@@ -10,16 +14,14 @@ def password_gate():
         if password == st.secrets["auth"]["admin_password"]:
             st.session_state.authenticated = True
             st.success("Access granted.")
+            st.experimental_rerun()  # 🔁 Rerun app to load main content
         elif password:
             st.error("Incorrect password")
         st.stop()
 
-password_gate()  # Call before any app logicimport streamlit as st
-from supabase import create_client
-import pandas as pd
-import datetime
-import altair as alt
+password_gate()  # 🔐 Protect page before any logic
 
+# --- App Logic Below ---
 # Connect to Supabase
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -51,21 +53,24 @@ for m_log in machine_logs:
     log_id = m_log["id"]
     log_date = m_log["date"]
     footage = m_log["footage"]
-    
+
     crew_links = [e for e in machine_employees if e["machine_log_id"] == log_id]
-    
+
     total_cost = 0
     crew_details = []
-    
+
     for link in crew_links:
         role_entry = role_lookup.get(link["employee_role_id"])
         if not role_entry:
             continue
-        
-        daily_entry = next((d for d in daily_logs if d["employee_role_id"] == link["employee_role_id"] and d["date"] == log_date), None)
+
+        daily_entry = next(
+            (d for d in daily_logs if d["employee_role_id"] == link["employee_role_id"] and d["date"] == log_date),
+            None
+        )
         if not daily_entry:
             continue
-        
+
         rate = role_entry["daily_rate"]
         pay = rate if daily_entry["day_type"] == "full" else rate / 2
         total_cost += pay
