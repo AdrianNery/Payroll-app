@@ -137,9 +137,9 @@ elif action == "Reorder":
 
     # Save button
     if st.button("💾 Save"):
-        for new_sort, name in enumerate(new_order):
-            # Update ALL roles for this name
-            supabase.table("employee_roles").update({"sort_order": new_sort}).eq("name", name).execute()
+        for idx, name in enumerate(new_order):
+            sort_order = idx + 1  # 👈 start from 1 instead of 0
+            supabase.table("employee_roles").update({"sort_order": sort_order}).eq("name", name).execute()
         
         st.session_state.drag_order = new_order
         st.success("✅ Sort order updated.")
