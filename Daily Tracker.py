@@ -138,4 +138,4 @@ elif action == "Reorder":
                 # Update sort_order for all entries matching this name
                 supabase.table("employee_roles").update({"sort_order": idx}).eq("name", name).execute()
         st.success("✅ Sort order updated.")
-        st.experimental_rerun()
+        st.rerun()
