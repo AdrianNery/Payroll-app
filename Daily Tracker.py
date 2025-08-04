@@ -3,6 +3,7 @@ from supabase import create_client
 import datetime
 import pandas as pd
 from collections import defaultdict
+from streamlit_sortables import sort_items
 
 # Connect to Supabase
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -114,9 +115,9 @@ elif action == "Remove":
             st.success(f"{name_to_remove} removed.")
 
 elif action == "Reorder":
-    st.subheader("📥 Reorder")
+    st.subheader("📥 Drag and Drop to Reorder Employees")
 
-    # Create a sort map from lowest current sort_order per employee name
+    # Create current order list
     name_sort_map = {}
     for r in employee_roles:
         name = r["name"]
@@ -124,15 +125,13 @@ elif action == "Reorder":
         if name not in name_sort_map or current_sort < name_sort_map[name]:
             name_sort_map[name] = current_sort
 
-    sorted_names = sorted(name_sort_map.keys(), key=lambda n: name_sort_map[n])
-    df_reorder = pd.DataFrame({"Name": sorted_names})
-    df_reorder["Sort Order"] = df_reorder.index
+    sorted_names = sorted(name_sort_map.items(), key=lambda x: x[1])
+    current_order = [name for name, _ in sorted_names]
 
-    edited = st.data_editor(df_reorder, use_container_width=True, num_rows="dynamic")
+    # Drag-and-drop interface
+    new_order = sort_items(current_order, direction="vertical", key="employee_sort")
 
-    if st.button("💾 Save Sort Order"):
-        for _, row in edited.iterrows():
-            name = row["Name"]
-            sort = int(row["Sort Order"])
-            supabase.table("employee_roles").update({"sort_order": sort}).eq("name", name).execute()
+    if st.button("💾 Save Dragged Sort Order"):
+        for idx, name in enumerate(new_order):
+            supabase.table("employee_roles").update({"sort_order": idx}).eq("name", name).execute()
         st.success("✅ Sort order updated.")
