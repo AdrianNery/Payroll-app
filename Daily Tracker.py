@@ -2,6 +2,7 @@ import streamlit as st
 from supabase import create_client
 import datetime
 import pandas as pd
+from collections import defaultdict
 
 # Connect to Supabase
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -9,56 +10,41 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title="Daily Crew Tracker", layout="wide")
-st.title("📅 Daily Crew Role Tracker")
+st.title("🗕 Daily Crew Role Tracker")
 
 selected_date = st.date_input("Select Work Date", datetime.date.today())
 
 # Load employee roles ordered by sort_order
 employee_roles = supabase.table("employee_roles").select("*").order("sort_order", desc=False).execute().data
 
+# Group employee roles by name
+grouped_roles = defaultdict(list)
+for entry in employee_roles:
+    grouped_roles[entry["name"]].append(entry)
+
+# Sort names based on the minimum sort_order of any of their roles
+sorted_names = sorted(grouped_roles.items(), key=lambda x: min(r["sort_order"] for r in x[1]))
+
 tech_data = {}
 
 # Technician input form
 with st.form("log_form"):
     st.subheader("👷 Daily Technician Inputs")
-    for role_entry in employee_roles:
-        name = role_entry["name"]
-        role_id = role_entry["id"]
-
+    for name, role_entries in sorted_names:
         st.markdown(f"**{name}**")
-
-        roles_for_tech = [r["role"] for r in employee_roles if r["name"] == name]
-        selected_role = st.selectbox(
-            f"Role for {name}",
-            roles_for_tech,
-            key=f"{role_id}_role"
-        )
-        day_type = st.radio(
-            f"{name} worked:",
-            ["none", "full", "half"],
-            key=f"{role_id}_daytype",
-            horizontal=True
-        )
-
-        tech_data[role_id] = {
-            "name": name,
-            "selected_role": selected_role,
-            "day_type": day_type
-        }
-
+        role_options = [r["role"] for r in role_entries]
+        selected_role = st.selectbox(f"Role for {name}", role_options, key=f"{name}_role")
+        day_type = st.radio(f"{name} worked:", ["none", "full", "half"], key=f"{name}_daytype", horizontal=True)
+        tech_data[name] = {"selected_role": selected_role, "day_type": day_type}
         st.markdown("---")
 
     submitted = st.form_submit_button("✅ Submit Today's Logs")
 
     if submitted:
         entries_upserted = 0
-        for role_id, data in tech_data.items():
+        for name, data in tech_data.items():
             if data["day_type"] != "none":
-                # Match by name + role to get correct ID again
-                matching = next(
-                    (r for r in employee_roles if r["name"] == data["name"] and r["role"] == data["selected_role"]),
-                    None
-                )
+                matching = next((r for r in grouped_roles[name] if r["role"] == data["selected_role"]), None)
                 if matching:
                     supabase.table("daily_logs").upsert({
                         "employee_role_id": matching["id"],
@@ -97,7 +83,7 @@ action = st.radio("Choose Action", ["Add", "Remove", "Reorder"], horizontal=True
 if action == "Add":
     with st.form("add_worker_form"):
         new_name = st.text_input("👤 Name")
-        new_role = st.selectbox("🛠 Role", ["driller", "locater", "labor"])
+        new_role = st.selectbox("👷 Role", ["driller", "locater", "labor"])
         new_rate = st.number_input("💰 Daily Pay", min_value=0.0, step=1.0)
         new_order = st.number_input("🔢 Sort Order", min_value=0, step=1)
 
@@ -123,17 +109,25 @@ elif action == "Remove":
             st.success(f"{name_to_remove} removed.")
 
 elif action == "Reorder":
-    st.subheader("📥 Reorder / Edit Employee List")
+    st.subheader("📥 Reorder Employees (by Name)")
 
-    df_roles = pd.DataFrame(employee_roles)[["id", "name", "role", "daily_rate", "sort_order"]]
-    df_edited = st.experimental_data_editor(df_roles, use_container_width=True, num_rows="dynamic")
+    # Get unique names sorted by current sort_order (lowest value per name)
+    name_sort_map = {}
+    for r in employee_roles:
+        name = r["name"]
+        current_sort = r.get("sort_order", 9999)
+        if name not in name_sort_map or current_sort < name_sort_map[name]:
+            name_sort_map[name] = current_sort
 
-    if st.button("💾 Save Reordering and Changes"):
-        for _, row in df_edited.iterrows():
-            supabase.table("employee_roles").update({
-                "name": row["name"],
-                "role": row["role"],
-                "daily_rate": float(row["daily_rate"]),
-                "sort_order": int(row["sort_order"])
-            }).eq("id", row["id"]).execute()
-        st.success("✅ Employee list updated.")
+    sorted_names = sorted(name_sort_map.keys(), key=lambda n: name_sort_map[n])
+    df_reorder = pd.DataFrame({"Name": sorted_names})
+
+    # Editable table
+    edited = st.experimental_data_editor(df_reorder, use_container_width=True)
+
+    if st.button("💾 Save Sort Order"):
+        for index, row in edited.iterrows():
+            name = row["Name"]
+            # Update all roles for this name
+            supabase.table("employee_roles").update({"sort_order": index}).eq("name", name).execute()
+        st.success("✅ Sort order updated for all roles per name.")
