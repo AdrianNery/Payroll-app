@@ -14,14 +14,16 @@ def password_gate():
         if password == st.secrets["auth"]["admin_password"]:
             st.session_state.authenticated = True
             st.success("Access granted.")
-            st.experimental_rerun()  # 🔁 Rerun app to load main content
+            st.experimental_rerun()
         elif password:
             st.error("Incorrect password")
-        st.stop()
+            st.stop()
+        else:
+            st.stop()
 
 password_gate()  # 🔐 Protect page before any logic
 
-# --- App Logic Below ---
+# --- App Logic ---
 # Connect to Supabase
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -34,14 +36,16 @@ st.title("📈 Machine Production Cost Report")
 start_date = st.date_input("Start Date", datetime.date.today() - datetime.timedelta(days=7))
 end_date = st.date_input("End Date", datetime.date.today())
 
-# Load data
+# Load data from Supabase
 machines = supabase.table("machines").select("*").execute().data
 employee_roles = supabase.table("employee_roles").select("*").execute().data
-daily_logs = supabase.table("daily_logs").select("*").gte("date", str(start_date)).lte("date", str(end_date)).execute().data
-machine_logs = supabase.table("machine_logs").select("*").gte("date", str(start_date)).lte("date", str(end_date)).execute().data
+daily_logs = supabase.table("daily_logs").select("*") \
+    .gte("date", str(start_date)).lte("date", str(end_date)).execute().data
+machine_logs = supabase.table("machine_logs").select("*") \
+    .gte("date", str(start_date)).lte("date", str(end_date)).execute().data
 machine_employees = supabase.table("machine_employees").select("*").execute().data
 
-# Helper maps
+# Helper dictionaries
 machine_lookup = {m["id"]: m["name"] for m in machines}
 role_lookup = {r["id"]: r for r in employee_roles}
 
@@ -92,6 +96,7 @@ if report:
     df = pd.DataFrame(report)
     st.dataframe(df)
 
+    # Downloadable CSV
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", csv, f"cost_per_foot_{start_date}_to_{end_date}.csv", "text/csv")
 
