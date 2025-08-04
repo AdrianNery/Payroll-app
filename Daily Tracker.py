@@ -117,31 +117,30 @@ elif action == "Remove":
 elif action == "Reorder":
     st.subheader("📥 Drag and Drop")
 
-    # Build name -> min(sort_order) mapping
+    # Build a unique list of names and their minimum sort_order
     name_sort_map = {}
     for r in employee_roles:
         name = r["name"]
-        current_sort = int(r.get("sort_order") or 9999)
-        if name not in name_sort_map or current_sort < name_sort_map[name]:
-            name_sort_map[name] = current_sort
+        sort = int(r.get("sort_order") or 9999)
+        if name not in name_sort_map or sort < name_sort_map[name]:
+            name_sort_map[name] = sort
 
-    # Sort names for initial list
-    sorted_names_only = sorted(name_sort_map.items(), key=lambda x: x[1])
-    initial_order = [name for name, _ in sorted_names_only]
+    # Generate a sorted list of unique names
+    sorted_names_only = [name for name, _ in sorted(name_sort_map.items(), key=lambda x: x[1])]
 
-    # Load or initialize drag state
+    # Initialize session state if not present
     if "drag_order" not in st.session_state:
-        st.session_state.drag_order = initial_order
+        st.session_state.drag_order = sorted_names_only
 
-    # Show drag-and-drop interface
+    # Display drag-and-drop UI
     new_order = sort_items(st.session_state.drag_order, direction="vertical", key="employee_sort")
 
-    # Save new sort order
-    if st.button("💾 Save Dragged Sort Order"):
-        updates = []
-        for idx, name in enumerate(new_order):
-            updates.append(supabase.table("employee_roles").update({"sort_order": idx}).eq("name", name).execute())
-
-        st.session_state.drag_order = new_order  # Update session state
+    # Save button
+    if st.button("💾 Save"):
+        for new_sort, name in enumerate(new_order):
+            # Update ALL roles for this name
+            supabase.table("employee_roles").update({"sort_order": new_sort}).eq("name", name).execute()
+        
+        st.session_state.drag_order = new_order
         st.success("✅ Sort order updated.")
         st.rerun()
