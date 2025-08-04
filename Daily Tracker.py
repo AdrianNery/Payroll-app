@@ -115,23 +115,27 @@ elif action == "Remove":
             st.success(f"{name_to_remove} removed.")
 
 elif action == "Reorder":
-    st.subheader("📥 Drag and Drop to Reorder Employees")
+    st.subheader("📥 Drag and Drop")
 
-    # Create current order list
+    # Get current employee order based on minimum sort_order per name
     name_sort_map = {}
     for r in employee_roles:
         name = r["name"]
-        current_sort = r.get("sort_order", 9999)
+        current_sort = int(r.get("sort_order") or 9999)
         if name not in name_sort_map or current_sort < name_sort_map[name]:
             name_sort_map[name] = current_sort
 
-    sorted_names = sorted(name_sort_map.items(), key=lambda x: x[1])
-    current_order = [name for name, _ in sorted_names]
+    # Create sorted list of names
+    sorted_names_only = sorted(name_sort_map.items(), key=lambda x: x[1])
+    current_order = [name for name, _ in sorted_names_only]
 
-    # Drag-and-drop interface
+    # Drag-and-drop UI
     new_order = sort_items(current_order, direction="vertical", key="employee_sort")
 
-    if st.button("💾 Save Dragged Sort Order"):
+    if st.button("💾 Save"):
         for idx, name in enumerate(new_order):
-            supabase.table("employee_roles").update({"sort_order": idx}).eq("name", name).execute()
+            if name:
+                # Update sort_order for all entries matching this name
+                supabase.table("employee_roles").update({"sort_order": idx}).eq("name", name).execute()
         st.success("✅ Sort order updated.")
+        st.experimental_rerun()
