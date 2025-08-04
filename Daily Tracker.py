@@ -10,9 +10,9 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title="Daily Crew Tracker", layout="wide")
-st.title("🗕 Daily Crew Role Tracker")
+st.title("📅 Daily Tracker")
 
-selected_date = st.date_input("Select Work Date", datetime.date.today())
+selected_date = st.date_input("Select Date", datetime.date.today())
 
 # Load employee roles ordered by sort_order
 employee_roles = supabase.table("employee_roles").select("*").order("sort_order", desc=False).execute().data
@@ -20,6 +20,8 @@ employee_roles = supabase.table("employee_roles").select("*").order("sort_order"
 # Group employee roles by name
 grouped_roles = defaultdict(list)
 for entry in employee_roles:
+    # Default sort_order to a high value if missing
+    entry["sort_order"] = int(entry.get("sort_order") or 9999)
     grouped_roles[entry["name"]].append(entry)
 
 # Sort names based on the minimum sort_order of any of their roles
@@ -29,7 +31,7 @@ tech_data = {}
 
 # Technician input form
 with st.form("log_form"):
-    st.subheader("👷 Daily Technician Inputs")
+    st.subheader("👷 Technician Check-in")
     for name, role_entries in sorted_names:
         st.markdown(f"**{name}**")
         role_options = [r["role"] for r in role_entries]
@@ -76,7 +78,7 @@ else:
     st.info("No logs found for this date.")
 
 # --- Manage Employee List ---
-st.header("➕ Add / Remove / Reorder Employees")
+st.header("➕ Add / Remove / Reorder")
 
 action = st.radio("Choose Action", ["Add", "Remove", "Reorder"], horizontal=True)
 
@@ -85,17 +87,20 @@ if action == "Add":
         new_name = st.text_input("👤 Name")
         new_role = st.selectbox("👷 Role", ["driller", "locater", "labor"])
         new_rate = st.number_input("💰 Daily Pay", min_value=0.0, step=1.0)
-        new_order = st.number_input("🔢 Sort Order", min_value=0, step=1)
 
-        submit_add = st.form_submit_button("✅ Add Worker")
+        submit_add = st.form_submit_button("✅ Add Tech")
         if submit_add:
+            # Automatically assign the next sort order
+            current_sorts = [int(r.get("sort_order") or 0) for r in employee_roles]
+            next_sort_order = max(current_sorts, default=0) + 1
+
             supabase.table("employee_roles").insert({
                 "name": new_name,
                 "role": new_role,
                 "daily_rate": new_rate,
-                "sort_order": int(new_order)
+                "sort_order": next_sort_order
             }).execute()
-            st.success(f"{new_name} added.")
+            st.success(f"{new_name} added to bottom of list.")
 
 elif action == "Remove":
     with st.form("remove_worker_form"):
@@ -103,15 +108,15 @@ elif action == "Remove":
         name_to_remove = st.selectbox("👤 Select name", all_names)
         confirm = st.checkbox("⚠️ Confirm removal of all roles for this name")
 
-        submit_remove = st.form_submit_button("🗑 Remove Worker")
+        submit_remove = st.form_submit_button("🗑 Remove Tech")
         if submit_remove and confirm:
             supabase.table("employee_roles").delete().eq("name", name_to_remove).execute()
             st.success(f"{name_to_remove} removed.")
 
 elif action == "Reorder":
-    st.subheader("📥 Reorder Employees (by Name)")
+    st.subheader("📥 Reorder")
 
-    # Get unique names sorted by current sort_order (lowest value per name)
+    # Create a sort map from lowest current sort_order per employee name
     name_sort_map = {}
     for r in employee_roles:
         name = r["name"]
@@ -121,13 +126,13 @@ elif action == "Reorder":
 
     sorted_names = sorted(name_sort_map.keys(), key=lambda n: name_sort_map[n])
     df_reorder = pd.DataFrame({"Name": sorted_names})
+    df_reorder["Sort Order"] = df_reorder.index
 
-    # Editable table
-    edited = st.experimental_data_editor(df_reorder, use_container_width=True)
+    edited = st.data_editor(df_reorder, use_container_width=True, num_rows="dynamic")
 
     if st.button("💾 Save Sort Order"):
-        for index, row in edited.iterrows():
+        for _, row in edited.iterrows():
             name = row["Name"]
-            # Update all roles for this name
-            supabase.table("employee_roles").update({"sort_order": index}).eq("name", name).execute()
-        st.success("✅ Sort order updated for all roles per name.")
+            sort = int(row["Sort Order"])
+            supabase.table("employee_roles").update({"sort_order": sort}).eq("name", name).execute()
+        st.success("✅ Sort order updated.")
