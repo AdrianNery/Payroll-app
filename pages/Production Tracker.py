@@ -2,6 +2,7 @@ import streamlit as st
 from supabase import create_client
 import datetime
 import uuid
+from io import BytesIO
 
 # Connect to Supabase
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -67,18 +68,23 @@ with st.form("machine_production_form"):
 
         # 3. Upload photos to Supabase Storage
         # 3. Upload photos to Supabase Storage
+from io import BytesIO
+
+# 3. Upload photos to Supabase Storage
 if uploaded_photos:
     for photo in uploaded_photos:
         unique_name = f"{selected_date}_{psa_number}_{uuid.uuid4()}.jpg"
-        file_bytes = photo.read()  # ✅ Read raw bytes
-
+        
+        # Convert file to bytes
+        photo_bytes = photo.read()
         res = supabase.storage.from_("machinephotos").upload(
             path=unique_name,
-            file=file_bytes,  # ✅ Pass bytes
+            file=BytesIO(photo_bytes),
             file_options={"content-type": photo.type}
         )
 
-        if res.get("error"):
-            st.error(f"❌ Failed to upload {photo.name}")
+        # Check upload status
+        if hasattr(res, "status_code") and res.status_code >= 400:
+            st.error(f"Failed to upload {photo.name}")
         else:
-            st.success(f"📸 Uploaded: {photo.name}")
+            st.success(f"Uploaded: {photo.name}")
