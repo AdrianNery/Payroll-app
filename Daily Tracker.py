@@ -3,7 +3,7 @@ from supabase import create_client
 import datetime
 import pandas as pd
 
-# --- Supabase Connection ---
+# Connect to Supabase
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -11,31 +11,52 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 st.set_page_config(page_title="Daily Crew Tracker", layout="wide")
 st.title("📅 Daily Crew Role Tracker")
 
-selected_date = st.date_input("📆 Select Work Date", datetime.date.today())
+selected_date = st.date_input("Select Work Date", datetime.date.today())
 
-# --- Load Employee Roles ---
+# Load employee roles ordered by sort_order
 employee_roles = supabase.table("employee_roles").select("*").order("sort_order", desc=False).execute().data
-unique_names = [r["name"] for r in employee_roles]
 
-# --- Technician Input Form ---
 tech_data = {}
+
+# Technician input form
 with st.form("log_form"):
     st.subheader("👷 Daily Technician Inputs")
-    for name in unique_names:
+    for role_entry in employee_roles:
+        name = role_entry["name"]
+        role_id = role_entry["id"]
+
         st.markdown(f"**{name}**")
+
         roles_for_tech = [r["role"] for r in employee_roles if r["name"] == name]
-        selected_role = st.selectbox(f"Role for {name}", roles_for_tech, key=f"{name}_role")
-        day_type = st.radio(f"{name} worked:", ["none", "full", "half"], key=f"{name}_daytype", horizontal=True)
-        tech_data[name] = {"role": selected_role, "day_type": day_type}
+        selected_role = st.selectbox(
+            f"Role for {name}",
+            roles_for_tech,
+            key=f"{role_id}_role"
+        )
+        day_type = st.radio(
+            f"{name} worked:",
+            ["none", "full", "half"],
+            key=f"{role_id}_daytype",
+            horizontal=True
+        )
+
+        tech_data[role_id] = {
+            "name": name,
+            "selected_role": selected_role,
+            "day_type": day_type
+        }
+
         st.markdown("---")
 
     submitted = st.form_submit_button("✅ Submit Today's Logs")
+
     if submitted:
         entries_upserted = 0
-        for name, data in tech_data.items():
+        for role_id, data in tech_data.items():
             if data["day_type"] != "none":
+                # Match by name + role to get correct ID again
                 matching = next(
-                    (r for r in employee_roles if r["name"] == name and r["role"] == data["role"]),
+                    (r for r in employee_roles if r["name"] == data["name"] and r["role"] == data["selected_role"]),
                     None
                 )
                 if matching:
@@ -47,7 +68,7 @@ with st.form("log_form"):
                     entries_upserted += 1
         st.success(f"✅ {entries_upserted} logs upserted for {selected_date}")
 
-# --- Daily Work Log Viewer ---
+# Show logs
 st.header("📋 Today's Work Log")
 logs = supabase.table("daily_logs").select("*").eq("date", str(selected_date)).execute().data
 
@@ -68,7 +89,7 @@ if logs:
 else:
     st.info("No logs found for this date.")
 
-# --- Employee Management ---
+# --- Manage Employee List ---
 st.header("➕ Add / Remove / Reorder Employees")
 
 action = st.radio("Choose Action", ["Add", "Remove", "Reorder"], horizontal=True)
