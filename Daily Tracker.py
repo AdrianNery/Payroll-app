@@ -102,7 +102,8 @@ if action == "Add":
                 "sort_order": next_sort_order
             }).execute()
             st.success(f"{new_name} added to bottom of list.")
-
+            st.rerun()
+            
 elif action == "Remove":
     with st.form("remove_worker_form"):
         all_names = sorted(set(r["name"] for r in employee_roles))
@@ -113,7 +114,7 @@ elif action == "Remove":
         if submit_remove and confirm:
             supabase.table("employee_roles").delete().eq("name", name_to_remove).execute()
             st.success(f"{name_to_remove} removed.")
-
+            st.rerun()
 elif action == "Reorder":
     st.subheader("📥 Drag and Drop")
 
