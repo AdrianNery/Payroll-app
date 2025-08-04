@@ -32,9 +32,8 @@ for r in employee_roles:
 sorted_names = sorted(grouped_roles.items(), key=lambda x: min(r["sort_order"] for r in x[1]))
 all_employees = [name for name, _ in sorted_names]
 
-# Extract sorted unique employee names
-employee_set = set(r["name"] for r in employee_roles)
-all_employees = [name for name in custom_name_order if name in employee_set]
+
+
 
 # Select date
 selected_date = st.date_input("📆 Select Date", datetime.date.today())
