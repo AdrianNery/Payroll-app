@@ -3,7 +3,7 @@ from supabase import create_client
 import datetime
 import pandas as pd
 
-# Connect to Supabase
+# --- Supabase Connection ---
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -11,15 +11,14 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 st.set_page_config(page_title="Daily Crew Tracker", layout="wide")
 st.title("📅 Daily Crew Role Tracker")
 
-selected_date = st.date_input("Select Work Date", datetime.date.today())
+selected_date = st.date_input("📆 Select Work Date", datetime.date.today())
 
-# Load employee roles ordered by sort_order
+# --- Load Employee Roles ---
 employee_roles = supabase.table("employee_roles").select("*").order("sort_order", desc=False).execute().data
 unique_names = [r["name"] for r in employee_roles]
 
+# --- Technician Input Form ---
 tech_data = {}
-
-# Technician input form
 with st.form("log_form"):
     st.subheader("👷 Daily Technician Inputs")
     for name in unique_names:
@@ -31,12 +30,14 @@ with st.form("log_form"):
         st.markdown("---")
 
     submitted = st.form_submit_button("✅ Submit Today's Logs")
-
     if submitted:
         entries_upserted = 0
         for name, data in tech_data.items():
             if data["day_type"] != "none":
-                matching = next((r for r in employee_roles if r["name"] == name and r["role"] == data["role"]), None)
+                matching = next(
+                    (r for r in employee_roles if r["name"] == name and r["role"] == data["role"]),
+                    None
+                )
                 if matching:
                     supabase.table("daily_logs").upsert({
                         "employee_role_id": matching["id"],
@@ -46,7 +47,7 @@ with st.form("log_form"):
                     entries_upserted += 1
         st.success(f"✅ {entries_upserted} logs upserted for {selected_date}")
 
-# Show logs
+# --- Daily Work Log Viewer ---
 st.header("📋 Today's Work Log")
 logs = supabase.table("daily_logs").select("*").eq("date", str(selected_date)).execute().data
 
@@ -67,7 +68,7 @@ if logs:
 else:
     st.info("No logs found for this date.")
 
-# --- Manage Employee List ---
+# --- Employee Management ---
 st.header("➕ Add / Remove / Reorder Employees")
 
 action = st.radio("Choose Action", ["Add", "Remove", "Reorder"], horizontal=True)
