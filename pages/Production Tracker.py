@@ -66,17 +66,19 @@ with st.form("machine_production_form"):
                 }).execute()
 
         # 3. Upload photos to Supabase Storage
-        if uploaded_photos:
-            for photo in uploaded_photos:
-                unique_name = f"{selected_date}_{psa_number}_{uuid.uuid4()}.jpg"
-                res = supabase.storage.from_("machinephotos").upload(
-                    path=unique_name,
-                    file=photo,
-                    file_options={"content-type": photo.type}
-                )
-                if res.get("error"):
-                    st.error(f"Failed to upload {photo.name}")
-                else:
-                    st.success(f"Uploaded: {photo.name}")
+        # 3. Upload photos to Supabase Storage
+if uploaded_photos:
+    for photo in uploaded_photos:
+        unique_name = f"{selected_date}_{psa_number}_{uuid.uuid4()}.jpg"
+        file_bytes = photo.read()  # ✅ Read raw bytes
 
-        st.success(f"✅ Submission logged for {selected_machine_name} with PSA#: {psa_number}")
+        res = supabase.storage.from_("machinephotos").upload(
+            path=unique_name,
+            file=file_bytes,  # ✅ Pass bytes
+            file_options={"content-type": photo.type}
+        )
+
+        if res.get("error"):
+            st.error(f"❌ Failed to upload {photo.name}")
+        else:
+            st.success(f"📸 Uploaded: {photo.name}")

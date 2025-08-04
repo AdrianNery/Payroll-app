@@ -14,7 +14,7 @@ def password_gate():
         if password == st.secrets["auth"]["admin_password"]:
             st.session_state.authenticated = True
             st.success("Access granted. Reloading page...")
-            st.experimental_rerun()
+            st.rerun()
             return  # Prevent further execution
         elif password:
             st.error("Incorrect password")
