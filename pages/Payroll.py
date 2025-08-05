@@ -27,6 +27,8 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # --- Load datasets ---
 employee_roles = supabase.table("employee_roles").select("*").execute().data
 psa_rates = supabase.table("psa_rates").select("*").execute().data
+machine_employees = supabase.table("machine_employees").select("*").execute().data
+
 psa_rate_lookup = {p["psa_number"]: p for p in psa_rates}
 
 # --- Date range selection ---
@@ -43,8 +45,9 @@ weekly_logs = supabase.table("daily_logs").select("*") \
 machine_logs = supabase.table("machine_logs").select("*") \
     .gte("date", str(start_date)).lte("date", str(end_date)).execute().data
 
-summary_rows = []
 if weekly_logs:
+    # --- Payroll summary dataframe ---
+    summary_rows = []
     for log in weekly_logs:
         role_data = next((r for r in employee_roles if r["id"] == log["employee_role_id"]), None)
         if role_data:
@@ -61,8 +64,6 @@ if weekly_logs:
             })
 
     df = pd.DataFrame(summary_rows)
-
-    # --- Payroll summary ---
     grouped = df.groupby("Name").agg(
         Total_Days=("Date", "count"),
         Total_Pay=("Daily Pay", "sum")
@@ -74,9 +75,9 @@ if weekly_logs:
     total_cost = df["Daily Pay"].sum()
     st.metric("Total Weekly Payroll Cost", f"${total_cost:,.2f}")
 
-    # --- Revenue & Profit/Loss ---
+    # --- Job-Level Revenue & Labor Cost ---
     total_revenue = 0
-    revenue_rows = []
+    job_labor_rows = []
 
     for log in machine_logs:
         psa = log.get("psa_number")
@@ -85,57 +86,72 @@ if weekly_logs:
 
         pay_rate = float(rate_info.get("pay_rate") or 0) if rate_info else 0
         company_name = rate_info.get("company_name") if rate_info else "Unknown"
-
         revenue = footage * pay_rate
         total_revenue += revenue
-        revenue_rows.append({
+
+        # --- Labor cost for this job ---
+        crew_links = [e for e in machine_employees if e["machine_log_id"] == log["id"]]
+        labor_cost = 0
+        for crew in crew_links:
+            role_data = next((r for r in employee_roles if r["id"] == crew["employee_role_id"]), None)
+            if role_data:
+                # Match with daily log for correct pay
+                daily_entry = next(
+                    (d for d in weekly_logs if d["employee_role_id"] == crew["employee_role_id"] and d["date"] == log["date"]),
+                    None
+                )
+                if daily_entry:
+                    rate = role_data["daily_rate"]
+                    pay = rate if daily_entry["day_type"] == "full" else rate / 2
+                    labor_cost += pay
+
+        job_labor_rows.append({
             "Date": log["date"],
             "PSA Number": psa,
             "Company": company_name,
             "Footage": footage,
             "Pay Rate": pay_rate,
-            "Revenue": revenue
+            "Revenue": revenue,
+            "Labor Cost": labor_cost,
+            "Profit/Loss": revenue - labor_cost
         })
 
-    revenue_df = pd.DataFrame(revenue_rows) if revenue_rows else pd.DataFrame()
+    job_df = pd.DataFrame(job_labor_rows)
 
-    # --- Daily breakdown ---
-    if not revenue_df.empty:
-        daily_revenue = revenue_df.groupby("Date")["Revenue"].sum().reset_index()
-    else:
-        daily_revenue = pd.DataFrame(columns=["Date", "Revenue"])
+    if not job_df.empty:
+        st.subheader("📊 Job-Level Profit/Loss")
+        st.dataframe(job_df)
 
-    daily_labor = df.groupby("Date")["Daily Pay"].sum().reset_index()
+        # --- Daily totals ---
+        daily_breakdown = job_df.groupby("Date").agg({
+            "Revenue": "sum",
+            "Labor Cost": "sum",
+            "Profit/Loss": "sum"
+        }).reset_index()
 
-    daily_breakdown = pd.merge(daily_revenue, daily_labor, on="Date", how="outer").fillna(0)
-    daily_breakdown["Profit/Loss"] = daily_breakdown["Revenue"] - daily_breakdown["Daily Pay"]
+        st.subheader("📆 Daily Totals")
+        st.dataframe(daily_breakdown)
 
-    st.subheader("📊 Daily Profit/Loss Breakdown")
-    st.dataframe(daily_breakdown.sort_values("Date"))
+        # --- Exports ---
+        st.download_button(
+            "⬇️ Download Job-Level CSV",
+            data=job_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"job_profit_loss_{start_date}_to_{end_date}.csv",
+            mime="text/csv"
+        )
+        st.download_button(
+            "⬇️ Download Daily Totals CSV",
+            data=daily_breakdown.to_csv(index=False).encode("utf-8"),
+            file_name=f"daily_profit_loss_{start_date}_to_{end_date}.csv",
+            mime="text/csv"
+        )
 
-    # --- Export Daily Profit/Loss ---
-    csv_profit_loss = daily_breakdown.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="⬇️ Download Daily Profit/Loss CSV",
-        data=csv_profit_loss,
-        file_name=f"daily_profit_loss_{start_date}_to_{end_date}.csv",
-        mime="text/csv"
-    )
-
-    # --- Export Daily Labor Costs Only ---
-    csv_labor_costs = daily_labor.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="⬇️ Download Daily Labor Costs CSV",
-        data=csv_labor_costs,
-        file_name=f"daily_labor_costs_{start_date}_to_{end_date}.csv",
-        mime="text/csv"
-    )
-
+    # --- Summary Metrics ---
     net_profit = total_revenue - total_cost
     st.metric("Total Weekly Revenue", f"${total_revenue:,.2f}")
     st.metric("Net Profit / Loss", f"${net_profit:,.2f}")
 
-    # --- Download Weekly Payroll CSV ---
+    # --- Download Full Payroll CSV ---
     csv_payroll = df.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="⬇️ Download Full Payroll CSV",
