@@ -4,7 +4,13 @@ import datetime
 import pandas as pd
 from collections import defaultdict
 from streamlit_sortables import sort_items
+import pytz
 
+# Your local timezone
+LOCAL_TZ = pytz.timezone("US/Central")
+
+# Get today's local date
+local_today = datetime.datetime.now(LOCAL_TZ).date()
 # --- Connect to Supabase ---
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -13,7 +19,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 st.set_page_config(page_title="Daily Crew Tracker", layout="wide")
 st.title("📅 Daily Tracker")
 
-selected_date = st.date_input("Select Date", datetime.date.today())
+selected_date = st.date_input("📆 Select Date", local_today)
 
 # --- Load employee roles ordered by sort_order ---
 employee_roles = supabase.table("employee_roles").select("*").order("sort_order", desc=False).execute().data

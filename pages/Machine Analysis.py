@@ -3,7 +3,13 @@ from supabase import create_client
 import pandas as pd
 import datetime
 import altair as alt
+import pytz
 
+# Your local timezone
+LOCAL_TZ = pytz.timezone("US/Central")
+
+# Get today's local date
+local_today = datetime.datetime.now(LOCAL_TZ).date()
 # --- Password Protection ---
 def password_gate():
     if "authenticated" not in st.session_state:
@@ -32,8 +38,8 @@ st.set_page_config(page_title="Cost Per Foot", layout="wide")
 st.title("📈 Machine Production Cost Report")
 
 # Select date range
-start_date = st.date_input("Start Date", datetime.date.today() - datetime.timedelta(days=7))
-end_date = st.date_input("End Date", datetime.date.today())
+start_date = st.date_input("Start Date", local_today - datetime.timedelta(days=7))
+end_date = st.date_input("End Date", local_today)
 
 # Load data from Supabase
 machines = supabase.table("machines").select("*").execute().data
