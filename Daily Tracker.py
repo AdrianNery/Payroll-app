@@ -5,7 +5,7 @@ import pandas as pd
 from collections import defaultdict
 from streamlit_sortables import sort_items
 
-# Connect to Supabase
+# --- Connect to Supabase ---
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -15,22 +15,20 @@ st.title("📅 Daily Tracker")
 
 selected_date = st.date_input("Select Date", datetime.date.today())
 
-# Load employee roles ordered by sort_order
+# --- Load employee roles ordered by sort_order ---
 employee_roles = supabase.table("employee_roles").select("*").order("sort_order", desc=False).execute().data
 
-# Group employee roles by name
+# --- Group employee roles by name ---
 grouped_roles = defaultdict(list)
 for entry in employee_roles:
-    # Default sort_order to a high value if missing
     entry["sort_order"] = int(entry.get("sort_order") or 9999)
     grouped_roles[entry["name"]].append(entry)
 
-# Sort names based on the minimum sort_order of any of their roles
+# --- Sort names by min(sort_order) ---
 sorted_names = sorted(grouped_roles.items(), key=lambda x: min(r["sort_order"] for r in x[1]))
 
+# --- Technician Input Form ---
 tech_data = {}
-
-# Technician input form
 with st.form("log_form"):
     st.subheader("👷 Technician Check-in")
     for name, role_entries in sorted_names:
@@ -49,15 +47,29 @@ with st.form("log_form"):
             if data["day_type"] != "none":
                 matching = next((r for r in grouped_roles[name] if r["role"] == data["selected_role"]), None)
                 if matching:
-                    supabase.table("daily_logs").upsert({
-                        "employee_role_id": matching["id"],
-                        "date": str(selected_date),
-                        "day_type": data["day_type"]
-                    }, on_conflict=["employee_role_id", "date"]).execute()
-                    entries_upserted += 1
-        st.success(f"✅ {entries_upserted} logs upserted for {selected_date}")
+                    # --- Manual check instead of on_conflict ---
+                    existing = supabase.table("daily_logs") \
+                        .select("id") \
+                        .eq("employee_role_id", matching["id"]) \
+                        .eq("date", str(selected_date)) \
+                        .execute()
 
-# Show logs
+                    if existing.data:
+                        supabase.table("daily_logs").update({
+                            "day_type": data["day_type"]
+                        }).eq("id", existing.data[0]["id"]).execute()
+                    else:
+                        supabase.table("daily_logs").insert({
+                            "employee_role_id": matching["id"],
+                            "date": str(selected_date),
+                            "day_type": data["day_type"]
+                        }).execute()
+
+                    entries_upserted += 1
+
+        st.success(f"✅ {entries_upserted} logs saved for {selected_date}")
+
+# --- Show logs ---
 st.header("📋 Today's Work Log")
 logs = supabase.table("daily_logs").select("*").eq("date", str(selected_date)).execute().data
 
@@ -73,14 +85,12 @@ if logs:
                 "Day Type": log["day_type"],
                 "Daily Pay": f"${pay:.2f}"
             })
-    df = pd.DataFrame(display)
-    st.dataframe(df)
+    st.dataframe(pd.DataFrame(display))
 else:
     st.info("No logs found for this date.")
 
 # --- Manage Employee List ---
 st.header("➕ Add / Remove / Reorder")
-
 action = st.radio("Choose Action", ["Add", "Remove", "Reorder"], horizontal=True)
 
 if action == "Add":
@@ -88,13 +98,10 @@ if action == "Add":
         new_name = st.text_input("👤 Name")
         new_role = st.selectbox("👷 Role", ["driller", "locater", "labor"])
         new_rate = st.number_input("💰 Daily Pay", min_value=0.0, step=1.0)
-
         submit_add = st.form_submit_button("✅ Add Tech")
         if submit_add:
-            # Automatically assign the next sort order
             current_sorts = [int(r.get("sort_order") or 0) for r in employee_roles]
             next_sort_order = max(current_sorts, default=0) + 1
-
             supabase.table("employee_roles").insert({
                 "name": new_name,
                 "role": new_role,
@@ -103,22 +110,20 @@ if action == "Add":
             }).execute()
             st.success(f"{new_name} added to bottom of list.")
             st.rerun()
-            
+
 elif action == "Remove":
     with st.form("remove_worker_form"):
         all_names = sorted(set(r["name"] for r in employee_roles))
         name_to_remove = st.selectbox("👤 Select name", all_names)
         confirm = st.checkbox("⚠️ Confirm removal of all roles for this name")
-
         submit_remove = st.form_submit_button("🗑 Remove Tech")
         if submit_remove and confirm:
             supabase.table("employee_roles").delete().eq("name", name_to_remove).execute()
             st.success(f"{name_to_remove} removed.")
             st.rerun()
+
 elif action == "Reorder":
     st.subheader("📥 Drag and Drop")
-
-    # Build a unique list of names and their minimum sort_order
     name_sort_map = {}
     for r in employee_roles:
         name = r["name"]
@@ -126,22 +131,15 @@ elif action == "Reorder":
         if name not in name_sort_map or sort < name_sort_map[name]:
             name_sort_map[name] = sort
 
-    # Generate a sorted list of unique names
     sorted_names_only = [name for name, _ in sorted(name_sort_map.items(), key=lambda x: x[1])]
-
-    # Initialize session state if not present
     if "drag_order" not in st.session_state:
         st.session_state.drag_order = sorted_names_only
 
-    # Display drag-and-drop UI
     new_order = sort_items(st.session_state.drag_order, direction="vertical", key="employee_sort")
 
-    # Save button
     if st.button("💾 Save"):
         for idx, name in enumerate(new_order):
-            sort_order = idx + 1  # 👈 start from 1 instead of 0
-            supabase.table("employee_roles").update({"sort_order": sort_order}).eq("name", name).execute()
-        
+            supabase.table("employee_roles").update({"sort_order": idx + 1}).eq("name", name).execute()
         st.session_state.drag_order = new_order
         st.success("✅ Sort order updated.")
         st.rerun()
