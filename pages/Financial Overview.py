@@ -177,11 +177,16 @@ if not df_revenue.empty:
     st.dataframe(df_revenue)
 
     total_revenue = df_revenue["Revenue"].sum()
-    total_labor = df_revenue["Labor Cost"].sum()
+    total_machine_labor = df_revenue["Labor Cost"].sum()
     total_profit = df_revenue["Profit/Loss"].sum()
 
+    adjusted_net_profit = total_revenue - total_payroll
+    unassigned_labor = total_payroll - total_machine_labor
+
     st.metric("Total Revenue", f"${total_revenue:,.2f}")
-    st.metric("Total Labor Cost", f"${total_labor:,.2f}")
-    st.metric("Total Net Profit/Loss", f"${total_profit:,.2f}")
+    st.metric("Labor Cost (Machine Assigned)", f"${total_machine_labor:,.2f}")
+    st.metric("Total Payroll (from Daily Logs)", f"${total_payroll:,.2f}")
+    st.metric("Unassigned Labor Cost", f"${unassigned_labor:,.2f}")
+    st.metric("💡 Adjusted Net Profit (Revenue - Full Payroll)", f"${adjusted_net_profit:,.2f}")
 else:
     st.info("No revenue data found.")
