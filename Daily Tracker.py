@@ -162,7 +162,7 @@ action = st.radio("Choose Action", ["Add", "Remove", "Reorder"], horizontal=True
 if action == "Add":
     with st.form("add_worker_form"):
         new_name = st.text_input("👤 Name")
-        new_role = st.selectbox("👷 Role", ["driller", "locater", "labor"])
+        new_role = st.selectbox("👷 Role", ["Driller", "Locater", "Labor"])
         new_rate = st.number_input("💰 Daily Pay", min_value=0.0, step=1.0)
         submit_add = st.form_submit_button("✅ Add Tech")
         if submit_add:
