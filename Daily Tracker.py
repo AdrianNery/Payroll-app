@@ -76,7 +76,7 @@ with st.form("log_form"):
 # --- Manual Entry ---
 with st.expander("✍️ Manual Entry"):
     all_names = sorted(set(r["name"] for r in employee_roles))
-    all_roles = ["driller", "locator", "labor"]
+    all_roles = ["Driller", "Locator", "Labor"]
 
     with st.form("manual_entry_form"):
         manual_date = st.date_input("📅 Select Date for Manual Entry", local_today, key="manual_date")
