@@ -35,76 +35,75 @@ all_employees = [name for name, _ in sorted_names]
 # --- Add "Fiber Pulling" to the list of selectable machines ---
 machine_names = {m["name"]: m["id"] for m in machines}
 
-
 # --- Select date ---
-selected_date = st.date_input("📆 Select Date", local_today)
+with st.expander("📆 Select Date"):
+    selected_date = st.date_input("Choose Date", local_today)
 
 # --- Production entry form ---
-with st.form("machine_production_form"):
-    selected_machine_name = st.selectbox("🛠️ Select Machine / Operation", list(machine_names.keys()))
-    selected_machine_id = machine_names[selected_machine_name]
+with st.expander("📝 Submit New Production Log", expanded=True):
+    with st.form("machine_production_form"):
+        selected_machine_name = st.selectbox("🛠️ Select Machine / Operation", list(machine_names.keys()))
+        selected_machine_id = machine_names[selected_machine_name]
 
-    psa_number = st.text_input("📘 PSA# (Blueprint Number)")
-    footage = st.number_input("📏 Feet Bored / Pulled", min_value=0)
-    selected_names = st.multiselect("👷 Select Crew", options=all_employees)
+        psa_number = st.text_input("📘 PSA# (Blueprint Number)")
+        footage = st.number_input("📏 Feet Bored / Pulled", min_value=0)
+        selected_names = st.multiselect("👷 Select Crew", options=all_employees)
 
-    uploaded_photos = st.file_uploader(
-        "📸 Upload Photos (optional)", type=["jpg", "jpeg", "png"], accept_multiple_files=True
-    )
+        uploaded_photos = st.file_uploader(
+            "📸 Upload Photos (optional)", type=["jpg", "jpeg", "png"], accept_multiple_files=True
+        )
 
-    submitted = st.form_submit_button("✅ Submit This Production Log")
+        submitted = st.form_submit_button("✅ Submit This Production Log")
 
-    if submitted:
-        # 1. Insert into machine_logs
-        if selected_machine_id == "fiber_pulling":
-            # You might want to handle fiber pulling differently in the database
-            # For now, we insert with a special machine_id = None and type field
-            result = supabase.table("machine_logs").insert({
-                "machine_id": None,  # No specific machine linked
-                "operation_type": "Fiber Pulling",
-                "date": str(selected_date),
-                "footage": footage,
-                "psa_number": psa_number
-            }).execute()
-        else:
-            result = supabase.table("machine_logs").insert({
-                "machine_id": selected_machine_id,
-                "date": str(selected_date),
-                "footage": footage,
-                "psa_number": psa_number
-            }).execute()
-
-        machine_log_id = result.data[0]["id"]
-
-        # 2. Insert crew members
-        for name in selected_names:
-            role_entry = next((r for r in employee_roles if r["name"] == name), None)
-            if role_entry:
-                supabase.table("machine_employees").insert({
-                    "machine_log_id": machine_log_id,
-                    "employee_role_id": role_entry["id"]
+        if submitted:
+            # 1. Insert into machine_logs
+            if selected_machine_id == "fiber_pulling":
+                result = supabase.table("machine_logs").insert({
+                    "machine_id": None,
+                    "operation_type": "Fiber Pulling",
+                    "date": str(selected_date),
+                    "footage": footage,
+                    "psa_number": psa_number
+                }).execute()
+            else:
+                result = supabase.table("machine_logs").insert({
+                    "machine_id": selected_machine_id,
+                    "date": str(selected_date),
+                    "footage": footage,
+                    "psa_number": psa_number
                 }).execute()
 
-        # 3. Upload photos
-        if uploaded_photos:
-            for photo in uploaded_photos:
-                unique_name = f"{selected_date}_{psa_number}_{uuid.uuid4()}.jpg"
+            machine_log_id = result.data[0]["id"]
 
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(photo.read())
-                    tmp_path = tmp.name
+            # 2. Insert crew members
+            for name in selected_names:
+                role_entry = next((r for r in employee_roles if r["name"] == name), None)
+                if role_entry:
+                    supabase.table("machine_employees").insert({
+                        "machine_log_id": machine_log_id,
+                        "employee_role_id": role_entry["id"]
+                    }).execute()
 
-                res = supabase.storage.from_("machinephotos").upload(
-                    path=unique_name,
-                    file=tmp_path,
-                    file_options={"content-type": photo.type}
-                )
+            # 3. Upload photos
+            if uploaded_photos:
+                for photo in uploaded_photos:
+                    unique_name = f"{selected_date}_{psa_number}_{uuid.uuid4()}.jpg"
 
-                os.remove(tmp_path)
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                        tmp.write(photo.read())
+                        tmp_path = tmp.name
 
-                if hasattr(res, "status_code") and res.status_code >= 400:
-                    st.error(f"❌ Failed to upload {photo.name}")
-                else:
-                    st.success(f"✅ Uploaded: {photo.name}")
+                    res = supabase.storage.from_("machinephotos").upload(
+                        path=unique_name,
+                        file=tmp_path,
+                        file_options={"content-type": photo.type}
+                    )
 
-        st.success(f"✅ Production log saved for {selected_machine_name} with PSA#: {psa_number}")
+                    os.remove(tmp_path)
+
+                    if hasattr(res, "status_code") and res.status_code >= 400:
+                        st.error(f"❌ Failed to upload {photo.name}")
+                    else:
+                        st.success(f"✅ Uploaded: {photo.name}")
+
+            st.success(f"✅ Production log saved for {selected_machine_name} with PSA#: {psa_number}")

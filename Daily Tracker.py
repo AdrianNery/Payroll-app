@@ -35,106 +35,105 @@ sorted_names = sorted(grouped_roles.items(), key=lambda x: min(r["sort_order"] f
 # --- Technician Input Form ---
 tech_data = {}
 with st.form("log_form"):
-    st.subheader("👷 Technician Check-in")
-    for name, role_entries in sorted_names:
-        st.markdown(f"**{name}**")
-        role_options = [r["role"] for r in role_entries]
-        selected_role = st.selectbox(f"Role for {name}", role_options, key=f"{name}_role")
-        day_type = st.radio(f"{name} worked:", ["none", "full", "half"], key=f"{name}_daytype", horizontal=True)
-        tech_data[name] = {"selected_role": selected_role, "day_type": day_type}
-        st.markdown("---")
+    with st.expander("👷 Technician Check-in", expanded=True):
+        for name, role_entries in sorted_names:
+            st.markdown(f"**{name}**")
+            role_options = [r["role"] for r in role_entries]
+            selected_role = st.selectbox(f"Role for {name}", role_options, key=f"{name}_role")
+            day_type = st.radio(f"{name} worked:", ["none", "full", "half"], key=f"{name}_daytype", horizontal=False)
+            tech_data[name] = {"selected_role": selected_role, "day_type": day_type}
+            st.markdown("---")
 
-    submitted = st.form_submit_button("✅ Submit Today's Logs")
+        submitted = st.form_submit_button("✅ Submit Today's Logs")
 
-    if submitted:
-        entries_upserted = 0
-        for name, data in tech_data.items():
-            if data["day_type"] != "none":
-                matching = next((r for r in grouped_roles[name] if r["role"] == data["selected_role"]), None)
-                if matching:
-                    existing = supabase.table("daily_logs") \
-                        .select("id") \
-                        .eq("employee_role_id", matching["id"]) \
-                        .eq("date", str(selected_date)) \
-                        .execute()
+        if submitted:
+            entries_upserted = 0
+            for name, data in tech_data.items():
+                if data["day_type"] != "none":
+                    matching = next((r for r in grouped_roles[name] if r["role"] == data["selected_role"]), None)
+                    if matching:
+                        existing = supabase.table("daily_logs") \
+                            .select("id") \
+                            .eq("employee_role_id", matching["id"]) \
+                            .eq("date", str(selected_date)) \
+                            .execute()
 
-                    if existing.data:
-                        supabase.table("daily_logs").update({
-                            "day_type": data["day_type"]
-                        }).eq("id", existing.data[0]["id"]).execute()
-                    else:
-                        supabase.table("daily_logs").insert({
-                            "employee_role_id": matching["id"],
-                            "date": str(selected_date),
-                            "day_type": data["day_type"]
-                        }).execute()
+                        if existing.data:
+                            supabase.table("daily_logs").update({
+                                "day_type": data["day_type"]
+                            }).eq("id", existing.data[0]["id"]).execute()
+                        else:
+                            supabase.table("daily_logs").insert({
+                                "employee_role_id": matching["id"],
+                                "date": str(selected_date),
+                                "day_type": data["day_type"]
+                            }).execute()
 
-                    entries_upserted += 1
+                        entries_upserted += 1
 
-        st.success(f"✅ {entries_upserted} logs saved for {selected_date}")
+            st.success(f"✅ {entries_upserted} logs saved for {selected_date}")
 
 # --- Manual Entry ---
-st.subheader("✍️ Manual Entry")
-all_roles = list(set((r["role"] for r in employee_roles)))
-all_names_roles = [(r["name"], r["role"], r["id"]) for r in employee_roles]
-name_options = sorted(set(r["name"] for r in employee_roles))
+with st.expander("✍️ Manual Entry"):
+    all_names = sorted(set(r["name"] for r in employee_roles))
+    all_roles = ["driller", "locator", "labor"]
 
-with st.form("manual_entry"):
-    selected_names = st.multiselect("Select Worker(s)", name_options)
-    selected_role = st.selectbox("Select Role", ["driller", "locator", "labor"])
-    selected_day_type = st.radio("Work Duration", ["full", "half"], horizontal=True)
-    manual_submit = st.form_submit_button("➕ Add Log")
+    with st.form("manual_entry_form"):
+        manual_date = st.date_input("📅 Select Date for Manual Entry", local_today, key="manual_date")
+        selected_names = st.multiselect("Select Worker(s)", all_names)
+        selected_role = st.selectbox("Select Role", all_roles)
+        selected_day_type = st.radio("Work Duration", ["full", "half"], horizontal=False)
+        manual_submit = st.form_submit_button("➕ Add Log")
 
-    if manual_submit:
-        for name in selected_names:
-            role_entry = next((r for r in employee_roles if r["name"] == name and r["role"] == selected_role), None)
-            if role_entry:
-                supabase.table("daily_logs").insert({
-                    "employee_role_id": role_entry["id"],
-                    "date": str(selected_date),
-                    "day_type": selected_day_type
-                }).execute()
-        st.success("✅ Manual logs added!")
-        st.rerun()
+        if manual_submit:
+            for name in selected_names:
+                role_entry = next((r for r in employee_roles if r["name"] == name and r["role"] == selected_role), None)
+                if role_entry:
+                    supabase.table("daily_logs").insert({
+                        "employee_role_id": role_entry["id"],
+                        "date": str(manual_date),
+                        "day_type": selected_day_type
+                    }).execute()
+            st.success("✅ Manual logs added!")
+            st.rerun()
 
 # --- Edit or Delete Logs ---
-st.subheader("✏️ Update / Delete Logs")
-all_logs = supabase.table("daily_logs").select("*").eq("date", str(selected_date)).execute().data
+with st.expander("✏️ Update / Delete Logs"):
+    all_logs = supabase.table("daily_logs").select("*").eq("date", str(selected_date)).execute().data
 
-if all_logs:
-    logs_with_names = []
-    for log in all_logs:
-        role = next((r for r in employee_roles if r["id"] == log["employee_role_id"]), None)
-        if role:
-            logs_with_names.append({
-                "Log ID": log["id"],
-                "Name": role["name"],
-                "Role": role["role"],
-                "Day Type": log["day_type"]
-            })
+    if all_logs:
+        logs_with_names = []
+        for log in all_logs:
+            role = next((r for r in employee_roles if r["id"] == log["employee_role_id"]), None)
+            if role:
+                logs_with_names.append({
+                    "Log ID": log["id"],
+                    "Name": role["name"],
+                    "Role": role["role"],
+                    "Day Type": log["day_type"]
+                })
 
-    df_edit = pd.DataFrame(logs_with_names)
-    selected_row = st.selectbox("Select Log to Edit", df_edit.index, format_func=lambda i: f"{df_edit.iloc[i]['Name']} ({df_edit.iloc[i]['Day Type']})")
+        df_edit = pd.DataFrame(logs_with_names)
+        selected_row = st.selectbox("Select Log to Edit", df_edit.index, format_func=lambda i: f"{df_edit.iloc[i]['Name']} ({df_edit.iloc[i]['Day Type']})")
+        selected_log = df_edit.iloc[selected_row]
+        new_day_type = st.radio("New Day Type", ["full", "half"], index=["full", "half"].index(selected_log["Day Type"]))
 
-    selected_log = df_edit.iloc[selected_row]
-    new_day_type = st.radio("New Day Type", ["full", "half"], index=["full", "half"].index(selected_log["Day Type"]))
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔁 Update Log"):
+                supabase.table("daily_logs").update({
+                    "day_type": new_day_type
+                }).eq("id", selected_log["Log ID"]).execute()
+                st.success("✅ Log updated!")
+                st.rerun()
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🔁 Update Log"):
-            supabase.table("daily_logs").update({
-                "day_type": new_day_type
-            }).eq("id", selected_log["Log ID"]).execute()
-            st.success("✅ Log updated!")
-            st.rerun()
-
-    with col2:
-        if st.button("🗑 Delete Log"):
-            supabase.table("daily_logs").delete().eq("id", selected_log["Log ID"]).execute()
-            st.warning("⚠️ Log deleted.")
-            st.rerun()
-else:
-    st.info("No logs available to update or delete.")
+        with col2:
+            if st.button("🗑 Delete Log"):
+                supabase.table("daily_logs").delete().eq("id", selected_log["Log ID"]).execute()
+                st.warning("⚠️ Log deleted.")
+                st.rerun()
+    else:
+        st.info("No logs available to update or delete.")
 
 # --- Show logs ---
 st.header("📋 Today's Work Log")
@@ -152,7 +151,7 @@ if logs:
                 "Day Type": log["day_type"],
                 "Daily Pay": f"${pay:.2f}"
             })
-    st.dataframe(pd.DataFrame(display))
+    st.dataframe(pd.DataFrame(display), use_container_width=True)
 else:
     st.info("No logs found for this date.")
 

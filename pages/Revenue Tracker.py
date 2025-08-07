@@ -13,6 +13,27 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title="Revenue Tracker", layout="wide")
+st.markdown("""
+    <style>
+        .block-container {
+            padding: 1rem 1rem 1rem 1rem;
+            max-width: 100%;
+        }
+        .stButton>button {
+            width: 100%;
+        }
+        .stTextInput>div>input, .stNumberInput>div>input {
+            font-size: 1.1rem;
+        }
+        .stSelectbox>div>div {
+            font-size: 1.1rem;
+        }
+        .stRadio>div>label {
+            font-size: 1.1rem;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("💰 Revenue Tracker")
 
 # --- Add New Contract Form ---
@@ -26,7 +47,6 @@ with st.form("add_contract_form"):
 
     if submit_contract:
         if psa_number and company_name and pay_rate > 0:
-            # Insert into Supabase
             res = supabase.table("psa_rates").insert({
                 "psa_number": psa_number.strip(),
                 "company_name": company_name.strip(),
@@ -51,7 +71,6 @@ if contracts:
     df = pd.DataFrame(contracts)
     st.dataframe(df)
 
-    # --- Edit Pay Rate / Company Name ---
     st.subheader("✏️ Edit Contract")
     psa_list = [c["psa_number"] for c in contracts]
     selected_psa = st.selectbox("Select PSA to Edit", psa_list)
