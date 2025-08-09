@@ -67,3 +67,4 @@ with st.expander("📝 Request Access"):
             st.success("✅ Request submitted! You’ll be notified once approved.")
         except Exception as e:
             st.error("⚠️ Account request failed (possibly already exists).")
+            
