@@ -3,7 +3,11 @@ from supabase import create_client
 import pandas as pd
 import datetime
 import pytz
+import streamlit as st
+from auth_helpers import require_login
 
+# Example: Daily Tracker visible to supervisors & admins
+require_login(roles=["supervisor", "admin"])
 # --- Local timezone ---
 LOCAL_TZ = pytz.timezone("US/Central")
 

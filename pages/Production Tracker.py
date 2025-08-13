@@ -6,7 +6,11 @@ import tempfile
 import os
 import pytz
 from collections import defaultdict
+import streamlit as st
+from auth_helpers import require_login
 
+# Example: Daily Tracker visible to supervisors & admins
+require_login(roles=["supervisor", "admin"])
 # --- Timezone setup ---
 LOCAL_TZ = pytz.timezone("US/Central")
 local_today = datetime.datetime.now(LOCAL_TZ).date()
