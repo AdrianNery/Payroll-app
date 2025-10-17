@@ -48,7 +48,7 @@ def load_employee_roles(client):
                 .execute()
             ).data or []
 
-    # normalize and local sort fallback
+    # normalize and local sort fallback (by per-row sort_order then name)
     for r in rows:
         try:
             r["sort_order"] = int(r.get("sort_order")) if r.get("sort_order") is not None else 9999
@@ -59,12 +59,19 @@ def load_employee_roles(client):
 
 employee_roles = load_employee_roles(supabase)
 
-# ---- Group roles by name & sort names ----
+# ---- Group roles by name ----
 grouped_roles = defaultdict(list)
 for entry in employee_roles:
     grouped_roles[entry["name"]].append(entry)
 
-all_names = sorted(grouped_roles.keys())
+# ---- ORDER NAMES BY THEIR sort_order (not alphabetically) ----
+# We compute a name-level sort by using the *minimum* sort_order found for that person's roles.
+name_sort_map = {}
+for name, rows in grouped_roles.items():
+    min_so = min((r.get("sort_order") if r.get("sort_order") is not None else 9999) for r in rows)
+    name_sort_map[name] = min_so
+
+all_names = [name for name, _ in sorted(name_sort_map.items(), key=lambda x: x[1])]
 
 # ------------------------------------------------------
 # 1) Enter today's logs for each worker (bulk save form)
@@ -79,7 +86,7 @@ with st.form("today_logs_form"):
         with col:
             roles_for_name = [r["role"] for r in grouped_roles[name]]
             selected_role = st.selectbox(
-                f"{name} role",
+                f"{name}",  # removed the word "role" from label
                 roles_for_name,
                 key=f"{name}_role"
             )
@@ -225,11 +232,15 @@ with st.expander("✏️ Update / Delete Logs"):
                 "name": role_row["name"],
                 "role": role_row["role"],
                 "day_type": log["day_type"],
+                "sort_order": role_row.get("sort_order", 9999),
             }
         )
 
+    # ORDER the update list by the same person-level sort
+    display_rows.sort(key=lambda x: (name_sort_map.get(x["name"], 9999), x["name"], x["role"]))
+
     if display_rows:
-        df = pd.DataFrame(display_rows)
+        df = pd.DataFrame([{k: v for k, v in row.items() if k != "sort_order"} for row in display_rows])
         st.dataframe(df, hide_index=True, use_container_width=True)
 
         # Simple per-row editor
@@ -299,11 +310,15 @@ for log in (logs or []):
                 "Role": role_row["role"],
                 "Day Type": log["day_type"],
                 "Date": log["date"],
+                "sort_order": role_row.get("sort_order", 9999),
             }
         )
 
+# ORDER the display by person-level sort
+rows.sort(key=lambda x: (name_sort_map.get(x["Name"], 9999), x["Name"], x["Role"]))
+
 if rows:
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame([{k: v for k, v in r.items() if k != "sort_order"} for r in rows])
     st.dataframe(df, hide_index=True, use_container_width=True)
 else:
     st.info("No entries yet for the selected date.")
@@ -313,13 +328,7 @@ else:
 # -----------------------------------
 with st.expander("🔀 Sort Employee Display Order"):
     # Establish a deterministic order by minimal sort_order seen for each name
-    name_sort_map = {}
-    for r in employee_roles:
-        name = r["name"]
-        sort = r.get("sort_order") or 9999
-        if name not in name_sort_map or sort < name_sort_map[name]:
-            name_sort_map[name] = sort
-
+    # Use the current DB-driven order
     sorted_names_only = [name for name, _ in sorted(name_sort_map.items(), key=lambda x: x[1])]
     if "drag_order" not in st.session_state:
         st.session_state.drag_order = sorted_names_only
@@ -327,7 +336,8 @@ with st.expander("🔀 Sort Employee Display Order"):
     new_order = sort_items(st.session_state.drag_order, direction="vertical", key="employee_sort")
 
     if st.button("💾 Save Order"):
-        for idx, name in enumerate(new_order, start=1):  # 1-based index
+        # Persist new 1-based order to ALL roles for that person name
+        for idx, name in enumerate(new_order, start=1):
             supabase.table("employee_roles").update({"sort_order": idx}).eq("name", name).execute()
         st.session_state.drag_order = new_order
         st.success("✅ Sort order updated.")
