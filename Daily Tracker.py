@@ -20,11 +20,11 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ---- Date picker ----
-selected_date = st.date_input("📆 Select Date", local_today)
-
-# ---- Load employee roles safely (ignore company_id) ----
+# ---------------------------
+# Helpers: load & sort people
+# ---------------------------
 def load_employee_roles(client):
+    """Return rows from employee_roles with normalized sort_order and sane fallback ordering."""
     rows = []
     try:
         rows = (
@@ -57,6 +57,19 @@ def load_employee_roles(client):
     rows.sort(key=lambda r: (r["sort_order"], r["name"]))
     return rows
 
+def compute_name_sort_map(grouped_roles):
+    """Map each name -> the minimum sort_order across that name's roles."""
+    name_sort_map = {}
+    for name, rows in grouped_roles.items():
+        min_so = min((r.get("sort_order") if r.get("sort_order") is not None else 9999) for r in rows)
+        name_sort_map[name] = min_so
+    return name_sort_map
+
+def get_next_sort_order(name_sort_map):
+    """Return max(sort_order)+1, or 1 if empty."""
+    return (max(name_sort_map.values()) + 1) if name_sort_map else 1
+
+# initial load
 employee_roles = load_employee_roles(supabase)
 
 # ---- Group roles by name ----
@@ -65,13 +78,13 @@ for entry in employee_roles:
     grouped_roles[entry["name"]].append(entry)
 
 # ---- ORDER NAMES BY THEIR sort_order (not alphabetically) ----
-# We compute a name-level sort by using the *minimum* sort_order found for that person's roles.
-name_sort_map = {}
-for name, rows in grouped_roles.items():
-    min_so = min((r.get("sort_order") if r.get("sort_order") is not None else 9999) for r in rows)
-    name_sort_map[name] = min_so
-
+name_sort_map = compute_name_sort_map(grouped_roles)
 all_names = [name for name, _ in sorted(name_sort_map.items(), key=lambda x: x[1])]
+
+# ---------------------------
+# Date picker
+# ---------------------------
+selected_date = st.date_input("📆 Select Date", local_today)
 
 # ------------------------------------------------------
 # 1) Enter today's logs for each worker (bulk save form)
@@ -79,25 +92,26 @@ all_names = [name for name, _ in sorted(name_sort_map.items(), key=lambda x: x[1
 st.header("📝 Enter Today’s Logs")
 
 with st.form("today_logs_form"):
-    cols = st.columns(3)
     tech_data = {}
-    for idx, name in enumerate(all_names):
-        col = cols[idx % 3]
-        with col:
+
+    # Single column to preserve order on phones (no wrapping)
+    for name in all_names:
+        with st.container():
+            st.subheader(name)
             roles_for_name = [r["role"] for r in grouped_roles[name]]
             selected_role = st.selectbox(
-                f"{name}",  # removed the word "role" from label
+                "",  # compact label
                 roles_for_name,
                 key=f"{name}_role"
             )
             day_type = st.radio(
-                f"{name} worked:",
+                "Day type",
                 ["none", "full", "half"],
                 key=f"{name}_daytype",
-                horizontal=False
+                horizontal=True
             )
             tech_data[name] = {"selected_role": selected_role, "day_type": day_type}
-            st.markdown("---")
+            st.divider()
 
     submitted = st.form_submit_button("✅ Save Today's Logs")
 
@@ -120,18 +134,10 @@ with st.form("today_logs_form"):
                     "date": selected_date.isoformat(),
                     "day_type": data["day_type"],
                 }
-                # Optional: include company_id if present in secrets (helps with RLS/NOT NULL)
-                try:
-                    company_id = st.secrets.get("COMPANY_ID")
-                except Exception:
-                    company_id = None
-                if company_id is not None:
-                    payload["company_id"] = company_id
 
                 supabase.table("daily_logs").upsert(
                     payload, on_conflict="employee_role_id,date"
                 ).execute()
-
                 entries_upserted += 1
 
             st.success(f"✅ {entries_upserted} logs saved for {selected_date}")
@@ -165,7 +171,7 @@ with st.form("manual_entry_form"):
         if selected_names else distinct_roles
     )
     selected_role = st.selectbox("Select Role", possible_roles)
-    selected_day_type = st.radio("Work Duration", ["full", "half"], horizontal=False)
+    selected_day_type = st.radio("Work Duration", ["full", "half"], horizontal=True)
     manual_submit = st.form_submit_button("➕ Add Log(s)")
 
     if manual_submit:
@@ -184,13 +190,6 @@ with st.form("manual_entry_form"):
                     "date": manual_date.isoformat(),
                     "day_type": selected_day_type,
                 }
-                # Optional: include company_id if present
-                try:
-                    company_id = st.secrets.get("COMPANY_ID")
-                except Exception:
-                    company_id = None
-                if company_id is not None:
-                    payload["company_id"] = company_id
 
                 supabase.table("daily_logs").upsert(
                     payload, on_conflict="employee_role_id,date"
@@ -288,6 +287,122 @@ with st.expander("✏️ Update / Delete Logs"):
     else:
         st.info("No logs available to update or delete for this date.")
 
+# --------------------------
+# 4) Manage workers & roles
+# --------------------------
+st.header("👤 Manage Workers & Roles")
+
+with st.expander("➕ Add Worker / Role"):
+    with st.form("add_worker_form"):
+        new_name = st.text_input("Name")
+        new_role = st.text_input("Role")
+        new_daily_rate = st.number_input("Daily Rate", min_value=0.0, step=1.0, format="%.2f")
+        add_btn = st.form_submit_button("Add")
+
+        if add_btn:
+            if not new_name or not new_role:
+                st.error("Please provide both a name and a role.")
+            else:
+                try:
+                    # If name exists, inherit that name's sort_order; else append to bottom
+                    if new_name in name_sort_map:
+                        sort_for_name = name_sort_map[new_name]
+                    else:
+                        sort_for_name = get_next_sort_order(name_sort_map)
+
+                    payload = {
+                        "name": new_name,
+                        "role": new_role,
+                        "daily_rate": new_daily_rate,
+                        "sort_order": sort_for_name,
+                    }
+                    res = supabase.table("employee_roles").insert(payload).execute()
+                    if isinstance(res.data, list) and res.data:
+                        st.success(f"Added {new_name} ({new_role}).")
+                    else:
+                        st.success("Added.")
+
+                    st.rerun()
+                except APIError as e:
+                    err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+                    st.error(f"Supabase error: {err.get('message')}")
+                    if err.get("details"):
+                        st.info(err["details"])
+                    if err.get("hint"):
+                        st.caption(err["hint"])
+                except Exception as e:
+                    st.error(f"Unexpected error: {e}")
+
+with st.expander("🗑️ Delete Worker / Role"):
+    # Build choices for easy selection
+    name_choices = [n for n in all_names]
+    # Flatten rows for specific-role deletion
+    role_rows_display = [f"{r['name']} — {r['role']} (id={r['id']})" for r in employee_roles]
+    id_by_display = {f"{r['name']} — {r['role']} (id={r['id']})": r["id"] for r in employee_roles}
+
+    tab_by_name, tab_by_row = st.tabs(["Delete All Roles by Name", "Delete Specific Role Row"])
+
+    with tab_by_name:
+        with st.form("del_by_name_form"):
+            del_name = st.selectbox("Name", name_choices) if name_choices else st.text_input("Name")
+            del_btn = st.form_submit_button("Delete All Roles for Name")
+            if del_btn and del_name:
+                try:
+                    supabase.table("employee_roles").delete().eq("name", del_name).execute()
+                    st.success(f"Deleted all roles for {del_name}.")
+                    st.rerun()
+                except APIError as e:
+                    err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+                    st.error(f"Supabase error: {err.get('message')}")
+                    if err.get("details"):
+                        st.info(err["details"])
+                    if err.get("hint"):
+                        st.caption(err["hint"])
+
+    with tab_by_row:
+        with st.form("del_by_row_form"):
+            del_row_display = st.selectbox("Select Role Row", role_rows_display) if role_rows_display else ""
+            del_row_btn = st.form_submit_button("Delete Selected Role Row")
+            if del_row_btn and del_row_display:
+                try:
+                    del_id = id_by_display[del_row_display]
+                    supabase.table("employee_roles").delete().eq("id", del_id).execute()
+                    st.success("Deleted the selected role row.")
+                    st.rerun()
+                except APIError as e:
+                    err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+                    st.error(f"Supabase error: {err.get('message')}")
+                    if err.get("details"):
+                        st.info(err["details"])
+                    if err.get("hint"):
+                        st.caption(err["hint"])
+
+# -----------------------------------
+# 5) Drag-to-sort employees by NAME
+# -----------------------------------
+with st.expander("🔀 Sort Employee Display Order (by Name)"):
+    sorted_names_only = [name for name, _ in sorted(name_sort_map.items(), key=lambda x: x[1])]
+    if "drag_order" not in st.session_state:
+        st.session_state.drag_order = sorted_names_only
+
+    new_order = sort_items(st.session_state.drag_order, direction="vertical", key="employee_sort")
+
+    if st.button("💾 Save Order"):
+        try:
+            for idx, name in enumerate(new_order, start=1):  # 1-based order
+                # IMPORTANT: update ALL rows for that name to keep same sort across roles
+                supabase.table("employee_roles").update({"sort_order": idx}).eq("name", name).execute()
+            st.session_state.drag_order = new_order
+            st.success("✅ Sort order updated.")
+            st.rerun()
+        except APIError as e:
+            err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+            st.error(f"Supabase error: {err.get('message')}")
+            if err.get("details"):
+                st.info(err["details"])
+            if err.get("hint"):
+                st.caption(err["hint"])
+
 # -------------
 # Show the day
 # -------------
@@ -322,23 +437,3 @@ if rows:
     st.dataframe(df, hide_index=True, use_container_width=True)
 else:
     st.info("No entries yet for the selected date.")
-
-# -----------------------------------
-# Optional: drag-to-sort employees UI
-# -----------------------------------
-with st.expander("🔀 Sort Employee Display Order"):
-    # Establish a deterministic order by minimal sort_order seen for each name
-    # Use the current DB-driven order
-    sorted_names_only = [name for name, _ in sorted(name_sort_map.items(), key=lambda x: x[1])]
-    if "drag_order" not in st.session_state:
-        st.session_state.drag_order = sorted_names_only
-
-    new_order = sort_items(st.session_state.drag_order, direction="vertical", key="employee_sort")
-
-    if st.button("💾 Save Order"):
-        # Persist new 1-based order to ALL roles for that person name
-        for idx, name in enumerate(new_order, start=1):
-            supabase.table("employee_roles").update({"sort_order": idx}).eq("name", name).execute()
-        st.session_state.drag_order = new_order
-        st.success("✅ Sort order updated.")
-        st.rerun()
