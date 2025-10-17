@@ -1,4 +1,3 @@
-
 import datetime
 from collections import defaultdict
 
@@ -6,6 +5,7 @@ import pandas as pd
 import pytz
 import streamlit as st
 from supabase import create_client
+from postgrest.exceptions import APIError
 from streamlit_sortables import sort_items
 
 st.set_page_config(page_title="Daily Crew Tracker", layout="wide")
@@ -47,9 +47,8 @@ def load_employee_roles(client):
                 .select("id,name,role,daily_rate")
                 .execute()
             ).data or []
-            for r in rows:
-                r["sort_order"] = None
 
+    # normalize and local sort fallback
     for r in rows:
         try:
             r["sort_order"] = int(r.get("sort_order")) if r.get("sort_order") is not None else 9999
@@ -65,23 +64,23 @@ grouped_roles = defaultdict(list)
 for entry in employee_roles:
     grouped_roles[entry["name"]].append(entry)
 
-sorted_names = sorted(
-    grouped_roles.items(),
-    key=lambda item: min(row["sort_order"] for row in item[1])
-)
+all_names = sorted(grouped_roles.keys())
 
-# -----------------------------
-# Technician bulk check-in form
-# -----------------------------
-tech_data = {}
-with st.form("log_form"):
-    with st.expander("👷 Technician Check-in", expanded=True):
-        for name, role_entries in sorted_names:
-            st.markdown(f"**{name}**")
-            role_options = [row["role"] for row in role_entries]
+# ------------------------------------------------------
+# 1) Enter today's logs for each worker (bulk save form)
+# ------------------------------------------------------
+st.header("📝 Enter Today’s Logs")
+
+with st.form("today_logs_form"):
+    cols = st.columns(3)
+    tech_data = {}
+    for idx, name in enumerate(all_names):
+        col = cols[idx % 3]
+        with col:
+            roles_for_name = [r["role"] for r in grouped_roles[name]]
             selected_role = st.selectbox(
-                f"Role for {name}",
-                role_options,
+                f"{name} role",
+                roles_for_name,
                 key=f"{name}_role"
             )
             day_type = st.radio(
@@ -97,65 +96,73 @@ with st.form("log_form"):
 
     if submitted:
         entries_upserted = 0
-        for name, data in tech_data.items():
-            if data["day_type"] == "none":
-                continue
+        try:
+            for name, data in tech_data.items():
+                if data["day_type"] == "none":
+                    continue
 
-            matching = next(
-                (r for r in grouped_roles[name] if r["role"] == data["selected_role"]),
-                None
-            )
-            if not matching:
-                continue
+                matching = next(
+                    (r for r in grouped_roles[name] if r["role"] == data["selected_role"]),
+                    None
+                )
+                if not matching:
+                    continue
 
-            existing = (
-                supabase.table("daily_logs")
-                .select("id")
-                .eq("employee_role_id", matching["id"])
-                .eq("date", str(selected_date))
-                .execute()
-            )
-            if existing.data:
-                supabase.table("daily_logs").update(
-                    {"day_type": data["day_type"]}
-                ).eq("id", existing.data[0]["id"]).execute()
-            else:
-                supabase.table("daily_logs").insert(
-                    {
-                        "employee_role_id": matching["id"],
-                        "date": str(selected_date),
-                        "day_type": data["day_type"],
-                    }
+                payload = {
+                    "employee_role_id": matching["id"],
+                    "date": selected_date.isoformat(),
+                    "day_type": data["day_type"],
+                }
+                # Optional: include company_id if present in secrets (helps with RLS/NOT NULL)
+                try:
+                    company_id = st.secrets.get("COMPANY_ID")
+                except Exception:
+                    company_id = None
+                if company_id is not None:
+                    payload["company_id"] = company_id
+
+                supabase.table("daily_logs").upsert(
+                    payload, on_conflict="employee_role_id,date"
                 ).execute()
 
-            entries_upserted += 1
+                entries_upserted += 1
 
-        st.success(f"✅ {entries_upserted} logs saved for {selected_date}")
+            st.success(f"✅ {entries_upserted} logs saved for {selected_date}")
+        except APIError as e:
+            err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+            st.error(f"Supabase error: {err.get('message')}")
+            if err.get("details"):
+                st.info(err["details"])
+            if err.get("hint"):
+                st.caption(err["hint"])
+            raise
 
-# ----------------
-# Manual Entry UI
-# ----------------
-with st.expander("✍️ Manual Entry"):
-    all_names = sorted(set(r["name"] for r in employee_roles))
-    name_to_roles = {
-        name: sorted(set(row["role"] for row in rows))
-        for name, rows in grouped_roles.items()
-    }
-    distinct_roles = sorted(set(r["role"] for r in employee_roles))
+# -------------------------------------
+# 2) Manual add of logs for any date(s)
+# -------------------------------------
+st.header("🧩 Add Log(s) Manually")
 
-    with st.form("manual_entry_form"):
-        manual_date = st.date_input("📅 Date for Manual Entry", local_today, key="manual_date")
-        selected_names = st.multiselect("Select Worker(s)", all_names)
+# Build role lists for multiselect convenience
+name_to_roles = {
+    name: sorted(set(row["role"] for row in rows))
+    for name, rows in grouped_roles.items()
+}
+distinct_roles = sorted(set(r["role"] for r in employee_roles))
 
-        possible_roles = (
-            sorted(set(role for n in selected_names for role in name_to_roles.get(n, [])))
-            if selected_names else distinct_roles
-        )
-        selected_role = st.selectbox("Select Role", possible_roles)
-        selected_day_type = st.radio("Work Duration", ["full", "half"], horizontal=False)
-        manual_submit = st.form_submit_button("➕ Add Log(s)")
+with st.form("manual_entry_form"):
+    manual_date = st.date_input("📅 Date for Manual Entry", local_today, key="manual_date")
+    selected_names = st.multiselect("Select Worker(s)", all_names)
 
-        if manual_submit:
+    possible_roles = (
+        sorted(set(role for n in selected_names for role in name_to_roles.get(n, [])))
+        if selected_names else distinct_roles
+    )
+    selected_role = st.selectbox("Select Role", possible_roles)
+    selected_day_type = st.radio("Work Duration", ["full", "half"], horizontal=False)
+    manual_submit = st.form_submit_button("➕ Add Log(s)")
+
+    if manual_submit:
+        try:
             added = 0
             for name in selected_names:
                 role_row = next(
@@ -165,84 +172,108 @@ with st.expander("✍️ Manual Entry"):
                 if not role_row:
                     continue
 
-                exists = (
-                    supabase.table("daily_logs")
-                    .select("id")
-                    .eq("employee_role_id", role_row["id"])
-                    .eq("date", str(manual_date))
-                    .execute()
-                )
-                if exists.data:
-                    # skip duplicates; switch to update(...) if you want "last write wins"
-                    continue
+                payload = {
+                    "employee_role_id": role_row["id"],
+                    "date": manual_date.isoformat(),
+                    "day_type": selected_day_type,
+                }
+                # Optional: include company_id if present
+                try:
+                    company_id = st.secrets.get("COMPANY_ID")
+                except Exception:
+                    company_id = None
+                if company_id is not None:
+                    payload["company_id"] = company_id
 
-                supabase.table("daily_logs").insert(
-                    {
-                        "employee_role_id": role_row["id"],
-                        "date": str(manual_date),
-                        "day_type": selected_day_type,
-                    }
+                supabase.table("daily_logs").upsert(
+                    payload, on_conflict="employee_role_id,date"
                 ).execute()
                 added += 1
 
             st.success(f"✅ {added} manual log(s) added.")
             st.rerun()
+        except APIError as e:
+            err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+            st.error(f"Supabase error: {err.get('message')}")
+            if err.get("details"):
+                st.info(err["details"])
+            if err.get("hint"):
+                st.caption(err["hint"])
+            raise
 
 # -------------------------
-# Update / Delete Day Logs
+# 3) Update / Delete Day Logs
 # -------------------------
 with st.expander("✏️ Update / Delete Logs"):
     all_logs = (
         supabase.table("daily_logs")
         .select("id,employee_role_id,day_type,date")
-        .eq("date", str(selected_date))
+        .eq("date", selected_date.isoformat())
         .execute()
-        .data
-    )
+    ).data or []
 
-    if all_logs:
-        role_by_id = {r["id"]: r for r in employee_roles}
-        logs_with_names = []
-        for log in all_logs:
-            role = role_by_id.get(log["employee_role_id"])
-            if not role:
-                continue
-            logs_with_names.append(
-                {
-                    "Log ID": log["id"],
-                    "Name": role["name"],
-                    "Role": role["role"],
-                    "Day Type": log["day_type"],
-                }
-            )
-
-        df_edit = pd.DataFrame(logs_with_names)
-        selected_row = st.selectbox(
-            "Select Log to Edit",
-            df_edit.index,
-            format_func=lambda i: f"{df_edit.iloc[i]['Name']} • {df_edit.iloc[i]['Role']} • {df_edit.iloc[i]['Day Type']}"
-        )
-        selected_log = df_edit.iloc[selected_row]
-
-        new_day_type = st.radio(
-            "New Day Type",
-            ["full", "half"],
-            index=["full", "half"].index(selected_log["Day Type"])
+    # Build a mapping for quick name/role lookup
+    role_map = {r["id"]: r for r in employee_roles}
+    display_rows = []
+    for log in all_logs:
+        role_row = role_map.get(log["employee_role_id"])
+        if not role_row:
+            continue
+        display_rows.append(
+            {
+                "id": log["id"],
+                "name": role_row["name"],
+                "role": role_row["role"],
+                "day_type": log["day_type"],
+            }
         )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔁 Update Log"):
-                supabase.table("daily_logs").update(
-                    {"day_type": new_day_type}
-                ).eq("id", selected_log["Log ID"]).execute()
-                st.success("✅ Log updated.")
-                st.rerun()
-        with col2:
-            if st.button("🗑 Delete Log"):
-                supabase.table("daily_logs").delete().eq("id", selected_log["Log ID"]).execute()
-                st.warning("⚠️ Log deleted.")
-                st.rerun()
+    if display_rows:
+        df = pd.DataFrame(display_rows)
+        st.dataframe(df, hide_index=True, use_container_width=True)
+
+        # Simple per-row editor
+        for row in display_rows:
+            col1, col2, col3 = st.columns([2,2,1])
+            with col1:
+                st.text_input("Name", row["name"], disabled=True, key=f"upd_name_{row['id']}")
+            with col2:
+                new_day = st.selectbox(
+                    "Day Type",
+                    ["full", "half", "off"],
+                    index=["full","half","off"].index(row["day_type"]) if row["day_type"] in ["full","half","off"] else 0,
+                    key=f"upd_day_{row['id']}"
+                )
+            with col3:
+                if st.button("Update", key=f"btn_upd_{row['id']}"):
+                    try:
+                        supabase.table("daily_logs").update(
+                            {"day_type": new_day}
+                        ).eq("id", row["id"]).execute()
+                        st.success("Updated.")
+                        st.rerun()
+                    except APIError as e:
+                        err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+                        st.error(f"Supabase error: {err.get('message')}")
+                        if err.get("details"):
+                            st.info(err["details"])
+                        if err.get("hint"):
+                            st.caption(err["hint"])
+
+        st.divider()
+        for row in display_rows:
+            if st.button(f"🗑️ Delete {row['name']} ({row['role']})", key=f"btn_del_{row['id']}"):
+                try:
+                    supabase.table("daily_logs").delete().eq("id", row["id"]).execute()
+                    st.success("Deleted.")
+                    st.rerun()
+                except APIError as e:
+                    err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+                    st.error(f"Supabase error: {err.get('message')}")
+                    if err.get("details"):
+                        st.info(err["details"])
+                    if err.get("hint"):
+                        st.caption(err["hint"])
     else:
         st.info("No logs available to update or delete for this date.")
 
@@ -253,78 +284,39 @@ st.header("📋 Today's Work Log")
 logs = (
     supabase.table("daily_logs")
     .select("id,employee_role_id,day_type,date")
-    .eq("date", str(selected_date))
+    .eq("date", selected_date.isoformat())
     .execute()
-    .data
-)
+).data
 
-if logs:
-    role_by_id = {r["id"]: r for r in employee_roles}
-    display = []
-    for log in logs:
-        role = role_by_id.get(log["employee_role_id"])
-        if not role:
-            continue
-        rate = float(role["daily_rate"] or 0)
-        pay = rate if log["day_type"] == "full" else rate / 2
-        display.append(
+role_map = {r["id"]: r for r in employee_roles}
+rows = []
+for log in (logs or []):
+    role_row = role_map.get(log["employee_role_id"])
+    if role_row:
+        rows.append(
             {
-                "Name": role["name"],
-                "Role": role["role"],
+                "Name": role_row["name"],
+                "Role": role_row["role"],
                 "Day Type": log["day_type"],
-                "Daily Pay": f"${pay:.2f}",
+                "Date": log["date"],
             }
         )
-    st.dataframe(pd.DataFrame(display), use_container_width=True)
+
+if rows:
+    df = pd.DataFrame(rows)
+    st.dataframe(df, hide_index=True, use_container_width=True)
 else:
-    st.info("No logs found for this date.")
+    st.info("No entries yet for the selected date.")
 
-# ----------------------------
-# Add / Remove / Reorder list
-# ----------------------------
-st.header("➕ Add / Remove / Reorder")
-action = st.radio("Choose Action", ["Add", "Remove", "Reorder"], horizontal=True)
-
-if action == "Add":
-    with st.form("add_worker_form"):
-        new_name = st.text_input("👤 Name")
-        distinct_roles = sorted(set(r["role"] for r in employee_roles))
-        new_role = st.selectbox("👷 Role", distinct_roles or ["Driller", "Locator", "Labor"])
-        new_rate = st.number_input("💰 Daily Pay", min_value=0.0, step=1.0)
-        submit_add = st.form_submit_button("✅ Add Tech")
-
-        if submit_add:
-            current_sorts = [int(r.get("sort_order") or 0) for r in employee_roles if r.get("sort_order") is not None]
-            next_sort_order = (max(current_sorts) if current_sorts else 0) + 1
-
-            supabase.table("employee_roles").insert(
-                {
-                    "name": new_name,
-                    "role": new_role,
-                    "daily_rate": new_rate,
-                    "sort_order": next_sort_order,
-                }
-            ).execute()
-            st.success(f"{new_name} added to bottom of list.")
-            st.rerun()
-
-elif action == "Remove":
-    with st.form("remove_worker_form"):
-        all_names = sorted(set(r["name"] for r in employee_roles))
-        name_to_remove = st.selectbox("👤 Select name", all_names)
-        confirm = st.checkbox("⚠️ Confirm removal of all roles for this name")
-        submit_remove = st.form_submit_button("🗑 Remove Tech")
-        if submit_remove and confirm:
-            supabase.table("employee_roles").delete().eq("name", name_to_remove).execute()
-            st.success(f"{name_to_remove} removed.")
-            st.rerun()
-
-elif action == "Reorder":
-    st.subheader("📥 Drag and Drop")
+# -----------------------------------
+# Optional: drag-to-sort employees UI
+# -----------------------------------
+with st.expander("🔀 Sort Employee Display Order"):
+    # Establish a deterministic order by minimal sort_order seen for each name
     name_sort_map = {}
     for r in employee_roles:
         name = r["name"]
-        sort = int(r.get("sort_order") or 9999)
+        sort = r.get("sort_order") or 9999
         if name not in name_sort_map or sort < name_sort_map[name]:
             name_sort_map[name] = sort
 
