@@ -69,11 +69,60 @@ def get_next_sort_order(name_sort_map):
     """Return max(sort_order)+1, or 1 if empty."""
     return (max(name_sort_map.values()) + 1) if name_sort_map else 1
 
+def upsert_daily_log_with_company_fallback(payload: dict):
+    """
+    Try to upsert daily_logs without company_id.
+    If Postgres returns 23502 (NOT NULL) mentioning company_id,
+    retry by inferring a company_id from any existing daily_logs row.
+    """
+    try:
+        supabase.table("daily_logs").upsert(
+            payload, on_conflict="employee_role_id,date"
+        ).execute()
+        return True, None
+    except APIError as e:
+        err = e.args[0] if e.args and isinstance(e.args[0], dict) else {"message": str(e)}
+        msg = (err.get("message") or "").lower()
+        code = err.get("code")
+        if code == "23502" and "company_id" in msg:
+            # Try to infer a company_id from existing rows
+            try:
+                existing = (
+                    supabase.table("daily_logs")
+                    .select("company_id")
+                    .not_.is_("company_id", "null")
+                    .limit(1)
+                    .execute()
+                ).data or []
+            except Exception:
+                existing = []
+            if existing and existing[0].get("company_id") is not None:
+                payload2 = {**payload, "company_id": existing[0]["company_id"]}
+                # Retry with inferred company_id
+                supabase.table("daily_logs").upsert(
+                    payload2, on_conflict="employee_role_id,date"
+                ).execute()
+                return True, None
+            else:
+                # No value to infer; instruct how to fix DB schema
+                fix = (
+                    "Your daily_logs table still requires company_id. "
+                    "Either drop NOT NULL:\n"
+                    "  ALTER TABLE daily_logs ALTER COLUMN company_id DROP NOT NULL;\n"
+                    "or drop the column:\n"
+                    "  ALTER TABLE daily_logs DROP COLUMN company_id;\n"
+                    "Then reload this page."
+                )
+                return False, {"shown": err, "howto": fix}
+        # Any other error
+        return False, {"shown": err, "howto": None}
+
 # initial load
 employee_roles = load_employee_roles(supabase)
 
 # ---- Group roles by name ----
-grouped_roles = defaultdict(list)
+from collections import defaultdict as _dd
+grouped_roles = _dd(list)
 for entry in employee_roles:
     grouped_roles[entry["name"]].append(entry)
 
@@ -135,9 +184,17 @@ with st.form("today_logs_form"):
                     "day_type": data["day_type"],
                 }
 
-                supabase.table("daily_logs").upsert(
-                    payload, on_conflict="employee_role_id,date"
-                ).execute()
+                ok, errinfo = upsert_daily_log_with_company_fallback(payload)
+                if not ok:
+                    err = errinfo["shown"]
+                    st.error(f"Supabase error: {err.get('message')}")
+                    if err.get("details"):
+                        st.info(err["details"])
+                    if err.get("hint"):
+                        st.caption(err["hint"])
+                    if errinfo.get("howto"):
+                        st.warning(errinfo["howto"])
+                    st.stop()
                 entries_upserted += 1
 
             st.success(f"✅ {entries_upserted} logs saved for {selected_date}")
@@ -191,9 +248,18 @@ with st.form("manual_entry_form"):
                     "day_type": selected_day_type,
                 }
 
-                supabase.table("daily_logs").upsert(
-                    payload, on_conflict="employee_role_id,date"
-                ).execute()
+                ok, errinfo = upsert_daily_log_with_company_fallback(payload)
+                if not ok:
+                    err = errinfo["shown"]
+                    st.error(f"Supabase error: {err.get('message')}")
+                    if err.get("details"):
+                        st.info(err["details"])
+                    if err.get("hint"):
+                        st.caption(err["hint"])
+                    if errinfo.get("howto"):
+                        st.warning(errinfo["howto"])
+                    st.stop()
+
                 added += 1
 
             st.success(f"✅ {added} manual log(s) added.")
